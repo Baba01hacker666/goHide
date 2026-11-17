@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            cc: gcc
+            apt: gcc
+          - goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: install cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: build (cgo + shim)
+        env:
+          CC: ${{ matrix.cc }}
+        run: |
+          mkdir -p dist/gohide-linux-${{ matrix.goarch }}
+          CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o dist/gohide-linux-${{ matrix.goarch }}/gohide .
+          ${{ matrix.cc }} -shared -fPIC -O2 -D_GNU_SOURCE \
+            -o dist/gohide-linux-${{ matrix.goarch }}/libgohide.so shim/shim.c
+          cp README.md LICENSE dist/gohide-linux-${{ matrix.goarch }}/
+
+      - name: smoke test (native arch only)
+        if: matrix.goarch == 'amd64'
+        run: |
+          dist/gohide-linux-amd64/gohide -n 'kworker/3:1' -- /bin/sh -c 'cat /proc/self/comm' | grep -qx 'kworker/3:1'
+
+      - name: package
+        run: |
+          tar -czf gohide-linux-${{ matrix.goarch }}.tar.gz -C dist gohide-linux-${{ matrix.goarch }}
+          sha256sum gohide-linux-${{ matrix.goarch }}.tar.gz > gohide-linux-${{ matrix.goarch }}.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gohide-linux-${{ matrix.goarch }}
+          path: gohide-linux-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: rel
+
+      - name: publish release with gh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" rel/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "gohide $GITHUB_REF_NAME" \
+            --generate-notes

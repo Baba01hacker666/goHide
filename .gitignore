@@ -1,0 +1,5 @@
+bin/
+dist/
+*.test
+*.so.orig
+gohide-linux-*.tar.gz*

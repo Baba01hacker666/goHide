@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build binary
+        run: go build -o bin/gohide .
+
+      - name: build shim
+        run: gcc -shared -fPIC -O2 -D_GNU_SOURCE -o bin/libgohide.so shim/shim.c
+
+      - name: unit tests
+        run: go test -v ./...
+
+      - name: smoke test (comm + cmdline masquerade)
+        run: |
+          out="$(./bin/gohide -n 'kworker/3:1' -- /bin/sh -c 'cat /proc/self/comm; cat /proc/self/cmdline | tr "\0" " "; echo')"
+          echo "$out"
+          echo "$out" | head -1 | grep -qx 'kworker/3:1'
+
+      - name: smoke test (parent fully wiped)
+        run: |
+          ./bin/gohide -n '[ksoftirqd/2]' -- sleep 30 >/dev/null 2>&1 &
+          pid=$!
+          sleep 0.5
+          args="$(ps -p $pid -o args=)"
+          comm="$(ps -p $pid -o comm=)"
+          echo "comm=$comm args=$args"
+          [ "$comm" = "[ksoftirqd/2]" ]
+          [ "$args" = "[ksoftirqd/2]" ]
+          kill $pid
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: gofmt check
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
