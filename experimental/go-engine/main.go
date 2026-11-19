@@ -20,13 +20,15 @@ func shortComm(name string) string {
 
 func main() {
 	args := os.Args[1:]
-	pt := os.Getenv("GOHIDE_PT") == "1"
-	if len(args) > 0 && args[0] == "-pt" {
-		pt = true
+	pt := os.Getenv("GOHIDE_PT") != "0"
+	if len(args) > 0 && (args[0] == "-pt" || args[0] == "-no-pt") {
+		if args[0] == "-no-pt" {
+			pt = false
+		}
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: go-engine [-pt] <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: go-engine [-no-pt] <command> [args...]")
 		os.Exit(2)
 	}
 	name := "[kworker/" + fmt.Sprint(runtime.NumCPU()-1) + ":1]"

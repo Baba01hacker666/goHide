@@ -31,16 +31,17 @@ var version = "dev"
 const usage = `gohide %s — run a command disguised as a kernel worker
 
 usage:
-  gohide [-pt] <command> [args...]
+  gohide [-no-pt] <command> [args...]
 
 That's it. Options and environment are hidden from ps/top and /proc, and the
-process shows up as something like [kworker/3:1-events].
+process shows up as something like [kworker/3:1-events]. The kernel comm is
+spoofed too, so plain top/htop and ps -o comm show the fake name.
 
-  -pt               also spoof the kernel comm (plain top/htop, ps -o comm)
+  -no-pt            leave the real kernel comm in place
 
 optional environment:
   GOHIDE_NAME=NAME    use a custom name instead of a random kworker
-  GOHIDE_PT=1         same as -pt
+  GOHIDE_PT=0         same as -no-pt
   GOHIDE_FOLLOW=1     hide child processes too
   GOHIDE_KEEP_ENV=1   leave the environment alone
   GOHIDE_PID=N        start under pid N
@@ -57,9 +58,9 @@ func shortComm(name string) string {
 	return s
 }
 
-// command strips optional leading "-pt" / "--" tokens.
+// command strips optional leading mode flags / "--" tokens.
 func command(argv []string) ([]string, error) {
-	if len(argv) > 0 && (argv[0] == "-pt" || argv[0] == "--") {
+	if len(argv) > 0 && (argv[0] == "-pt" || argv[0] == "-no-pt" || argv[0] == "--") {
 		argv = argv[1:]
 	}
 	if len(argv) > 0 && argv[0] == "--" {
@@ -165,7 +166,7 @@ func main() {
 		return
 	}
 
-	pt := os.Getenv("GOHIDE_PT") == "1" || (len(os.Args) > 1 && os.Args[1] == "-pt")
+	pt := os.Getenv("GOHIDE_PT") != "0" && !(len(os.Args) > 1 && os.Args[1] == "-no-pt")
 	cmd, err := command(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gohide: %v\n\n%s", err, fmt.Sprintf(usage, version))

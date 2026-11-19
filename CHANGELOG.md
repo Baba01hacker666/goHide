@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — comm spoofing by default
+
+- `prctl(PR_SET_NAME)` comm spoofing is now on by default. `-no-pt` / `GOHIDE_PT=0`
+  disables it; `-pt` is still accepted as a no-op.
+
 ## Unreleased — -pt comm spoofing
 
 - New `-pt` flag / `GOHIDE_PT=1`: injects `prctl(PR_SET_NAME)` into the target

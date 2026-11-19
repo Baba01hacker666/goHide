@@ -17,6 +17,7 @@ func TestCommand(t *testing.T) {
 		{name: "command with flags", argv: []string{"nmap", "-sCV", "-F", "host"}, want: []string{"nmap", "-sCV", "-F", "host"}},
 		{name: "leading separator stripped", argv: []string{"--", "curl", "-sS", "url"}, want: []string{"curl", "-sS", "url"}},
 		{name: "pt flag stripped", argv: []string{"-pt", "sleep", "1"}, want: []string{"sleep", "1"}},
+		{name: "no-pt flag stripped", argv: []string{"-no-pt", "sleep", "1"}, want: []string{"sleep", "1"}},
 		{name: "no command", argv: nil, wantErr: true},
 		{name: "only separator", argv: []string{"--"}, wantErr: true},
 	}
