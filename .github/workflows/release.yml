@@ -46,7 +46,7 @@ jobs:
       - name: smoke test (native arch only)
         if: matrix.goarch == 'amd64'
         run: |
-          out="$(dist/gohide-linux-amd64/gohide /bin/sh -c 'ps -p $$$$ -o args=')"
+          out="$(dist/gohide-linux-amd64/gohide /bin/sh -c 'ps -p $$ -o args=')"
           echo "$out"
           echo "$out" | grep -q '^\[kworker/'
 

@@ -26,7 +26,7 @@ jobs:
 
       - name: smoke test (cmdline masquerade)
         run: |
-          out="$(./bin/gohide /bin/sh -c 'ps -p $$$$ -o args=')"
+          out="$(./bin/gohide /bin/sh -c 'ps -p $$ -o args=')"
           echo "$out"
           echo "$out" | grep -q '^\[kworker/'
 
