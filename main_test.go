@@ -1,55 +1,69 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"regexp"
+	"testing"
+)
 
-func TestParseArgs(t *testing.T) {
+func TestCommand(t *testing.T) {
 	tests := []struct {
 		name    string
 		argv    []string
-		fake    string
-		hide    bool
-		wipe    bool
-		cmd     []string
+		want    []string
 		wantErr bool
 	}{
-		{name: "long flag", argv: []string{"--as", "kworker/3:1", "--", "sleep", "3600"},
-			fake: "kworker/3:1", cmd: []string{"sleep", "3600"}},
-		{name: "short flag alias", argv: []string{"-n", "kworker", "--", "sh", "-c", "x"},
-			fake: "kworker", cmd: []string{"sh", "-c", "x"}},
-		{name: "hide and wipe", argv: []string{"-n", "x", "--hide", "--wipe-args", "--", "nc", "-l", "-p", "9"},
-			fake: "x", hide: true, wipe: true, cmd: []string{"nc", "-l", "-p", "9"}},
-		{name: "flags after -- are command args", argv: []string{"-n", "x", "--", "curl", "-sS", "http://x"},
-			fake: "x", cmd: []string{"curl", "-sS", "http://x"}},
-		{name: "missing separator", argv: []string{"-n", "x", "sleep", "1"}, wantErr: true},
-		{name: "missing name", argv: []string{"--", "sleep", "1"}, wantErr: true},
-		{name: "empty command", argv: []string{"-n", "x", "--"}, wantErr: true},
+		{name: "plain command", argv: []string{"sleep", "1"}, want: []string{"sleep", "1"}},
+		{name: "command with flags", argv: []string{"nmap", "-sCV", "-F", "host"}, want: []string{"nmap", "-sCV", "-F", "host"}},
+		{name: "leading separator stripped", argv: []string{"--", "curl", "-sS", "url"}, want: []string{"curl", "-sS", "url"}},
+		{name: "no command", argv: nil, wantErr: true},
+		{name: "only separator", argv: []string{"--"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := parseArgs(tt.argv)
+			got, err := command(tt.argv)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("expected error, got cfg=%+v", cfg)
+					t.Fatalf("expected error, got %v", got)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if cfg.fake != tt.fake {
-				t.Errorf("fake = %q, want %q", cfg.fake, tt.fake)
-			}
-			if cfg.hide != tt.hide || cfg.wipe != tt.wipe {
-				t.Errorf("hide/wipe = %v/%v, want %v/%v", cfg.hide, cfg.wipe, tt.hide, tt.wipe)
-			}
-			if len(cfg.cmd) != len(tt.cmd) {
-				t.Fatalf("cmd = %v, want %v", cfg.cmd, tt.cmd)
-			}
-			for i := range tt.cmd {
-				if cfg.cmd[i] != tt.cmd[i] {
-					t.Errorf("cmd[%d] = %q, want %q", i, cfg.cmd[i], tt.cmd[i])
-				}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("command() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestZapperArgs(t *testing.T) {
+	t.Setenv("GOHIDE_FOLLOW", "")
+	t.Setenv("GOHIDE_KEEP_ENV", "")
+	t.Setenv("GOHIDE_PID", "")
+
+	got := zapperArgs("/bin/zapper", "[kworker/3:1]", []string{"nmap", "-sCV", "host"})
+	want := []string{"/bin/zapper", "-a", "[kworker/3:1]", "--", "nmap", "-sCV", "host"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("zapperArgs() = %v, want %v", got, want)
+	}
+
+	t.Setenv("GOHIDE_FOLLOW", "1")
+	t.Setenv("GOHIDE_KEEP_ENV", "1")
+	t.Setenv("GOHIDE_PID", "300")
+	got = zapperArgs("/bin/zapper", "x", []string{"sleep", "1"})
+	want = []string{"/bin/zapper", "-a", "x", "-f", "-E", "-n", "300", "--", "sleep", "1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("zapperArgs() with env = %v, want %v", got, want)
+	}
+}
+
+func TestKworkerName(t *testing.T) {
+	re := regexp.MustCompile(`^\[kworker/\d+:\d+(-[a-z_]+)?\]$`)
+	for i := 0; i < 100; i++ {
+		if n := kworkerName(); !re.MatchString(n) {
+			t.Fatalf("kworkerName() = %q, want kworker-shaped name", n)
+		}
 	}
 }

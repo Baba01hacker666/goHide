@@ -1,29 +1,30 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 CC      ?= gcc
 
-.PHONY: build shim test smoke clean install
+.PHONY: build core test smoke clean install
 
-build: shim
+build: core
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/gohide .
-	@echo "built: bin/gohide bin/libgohide.so ($(VERSION))"
+	@echo "built: bin/gohide bin/gohide-zapper ($(VERSION))"
 
-shim:
+# ptrace engine, vendored from hackerschoice/zapper (core/zapper.c)
+core:
 	@mkdir -p bin
-	$(CC) -shared -fPIC -O2 -D_GNU_SOURCE -o bin/libgohide.so shim/shim.c
+	$(CC) -O2 -DZVERSION='"$(VERSION:v%=%)"' -o bin/gohide-zapper core/zapper.c
 
 test:
 	go vet ./...
 	go test ./...
 
 smoke: build
-	@out="$$(./bin/gohide -n 'kworker/3:1' -- /bin/sh -c 'cat /proc/self/comm; cat /proc/self/cmdline | tr "\0" " "; echo')"; \
+	@out="$$(./bin/gohide /bin/sh -c 'ps -p $$$$ -o args=')"; \
 	echo "$$out"; \
-	echo "$$out" | head -1 | grep -qx 'kworker/3:1' && echo "smoke OK"
+	echo "$$out" | grep -q '^\[kworker/' && echo "smoke OK"
 
 clean:
 	rm -rf bin dist
 
 install: build
 	install -Dm755 bin/gohide ~/.local/bin/gohide
-	install -Dm755 bin/libgohide.so ~/.local/lib/libgohide.so
-	@echo "note: run 'gohide preload list' for system-wide hiding (root)"
+	install -Dm755 bin/gohide-zapper ~/.local/bin/gohide-zapper
+	@echo "installed gohide + ptrace engine to ~/.local/bin"

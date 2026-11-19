@@ -29,27 +29,33 @@ jobs:
       - name: install cross toolchain
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
 
-      - name: build (cgo + shim)
+      - name: build (go launcher + ptrace engine)
         env:
           CC: ${{ matrix.cc }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          mkdir -p dist/gohide-linux-${{ matrix.goarch }}
-          CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} \
+          dest="dist/gohide-linux-${GOARCH}"
+          mkdir -p "$dest"
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" \
             go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o dist/gohide-linux-${{ matrix.goarch }}/gohide .
-          ${{ matrix.cc }} -shared -fPIC -O2 -D_GNU_SOURCE \
-            -o dist/gohide-linux-${{ matrix.goarch }}/libgohide.so shim/shim.c
-          cp README.md LICENSE dist/gohide-linux-${{ matrix.goarch }}/
+            -o "$dest/gohide" .
+          "$CC" -O2 -DZVERSION=\"${GITHUB_REF_NAME#v}\" \
+            -o "$dest/gohide-zapper" core/zapper.c
+          cp README.md LICENSE "$dest/"
 
       - name: smoke test (native arch only)
         if: matrix.goarch == 'amd64'
         run: |
-          dist/gohide-linux-amd64/gohide -n 'kworker/3:1' -- /bin/sh -c 'cat /proc/self/comm' | grep -qx 'kworker/3:1'
+          out="$(dist/gohide-linux-amd64/gohide /bin/sh -c 'ps -p $$$$ -o args=')"
+          echo "$out"
+          echo "$out" | grep -q '^\[kworker/'
 
       - name: package
+        env:
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          tar -czf gohide-linux-${{ matrix.goarch }}.tar.gz -C dist gohide-linux-${{ matrix.goarch }}
-          sha256sum gohide-linux-${{ matrix.goarch }}.tar.gz > gohide-linux-${{ matrix.goarch }}.tar.gz.sha256
+          tar -czf "gohide-linux-${GOARCH}.tar.gz" -C dist "gohide-linux-${GOARCH}"
+          sha256sum "gohide-linux-${GOARCH}.tar.gz" > "gohide-linux-${GOARCH}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — zero-config CLI
+
+- `gohide <command> [args...]` now just works: a random kworker name is chosen
+  automatically. No `--` separator or `-n` required.
+- Advanced options moved to env vars (`GOHIDE_NAME`, `GOHIDE_FOLLOW`,
+  `GOHIDE_KEEP_ENV`, `GOHIDE_PID`).
+- Pure-Go ptrace engine stashed in `experimental/go-engine/` for later.
+
+## Unreleased — ptrace engine
+
+Replaced the `LD_PRELOAD` shim with the ptrace engine vendored from
+[hackerschoice/zapper](https://github.com/hackerschoice/zapper):
+
+- Works on static binaries; no `LD_PRELOAD` or libc hooks.
+- Wipes `/proc/PID/cmdline` and `/proc/PID/environ` right after `execve()`;
+  the target still sees its real argv/env, so it keeps working.
+- Go launcher is now cgo-free and `exec`s the engine, so no wrapper process
+  lingers.
+- New flags: `-f/--follow`, `-E/--no-env`, `--pid`. `--wipe-args` and `--hide`
+  are accepted as deprecated no-ops.
+- Dropped `libgohide.so`, system-wide `/etc/ld.so.preload` pid filtering, and
+  the project's own `comm` spoofing (the engine fakes the full cmdline, not
+  the kernel comm field).
+- Release tarballs now ship `gohide-zapper` instead of `libgohide.so`.
+
 ## v0.1.0 — 2026-11-17
 
 First release.
