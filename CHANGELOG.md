@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — -pt comm spoofing
+
+- New `-pt` flag / `GOHIDE_PT=1`: injects `prctl(PR_SET_NAME)` into the target
+  so the kernel comm is faked too. That covers plain `top`/`htop`, `ps -o comm`,
+  and `/proc/PID/comm`, which argv-based hiding alone can't reach.
+- Implemented in both the zapper core (`-pt` / `-p <name>`) and the pure-Go
+  engine in `experimental/go-engine/`.
+
 ## Unreleased — zero-config CLI
 
 - `gohide <command> [args...]` now just works: a random kworker name is chosen

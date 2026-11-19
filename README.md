@@ -27,24 +27,30 @@ compiles the embedded engine into `~/.cache/gohide/` on first run (needs
 ## Usage
 
 ```sh
-gohide <command> [args...]
+gohide [-pt] <command> [args...]
 gohide version
 ```
+
+`-pt` also spoofs the kernel `comm` (via an injected `prctl(PR_SET_NAME)`),
+so plain `top`/`htop` and `ps -o comm` show the fake name instead of the real
+executable. Worth using — otherwise those views still leak it.
 
 Optional environment:
 
 | var | effect |
 | --- | --- |
 | `GOHIDE_NAME=NAME` | custom name instead of a random kworker |
+| `GOHIDE_PT=1` | same as `-pt` |
 | `GOHIDE_FOLLOW=1` | hide child processes too |
 | `GOHIDE_KEEP_ENV=1` | leave the environment alone |
 | `GOHIDE_PID=N` | start under pid N |
 
 ## Notes
 
-- The kernel `comm` field (`ps -o comm`, default `top`/`htop`) keeps the real
-  executable name; the full command line (`ps aux`, `ps -ef`) shows the fake
-  one. `/proc/PID/exe` is unchanged too.
+- Without `-pt`, the kernel `comm` field (`ps -o comm`, default `top`/`htop`)
+  keeps the real executable name; the full command line (`ps aux`, `ps -ef`)
+  shows the fake one. `-pt` fixes comm too (15 byte limit). `/proc/PID/exe`
+  is unchanged regardless.
 - The program itself still sees its real argv/env, so it keeps working.
 - There's a short window between `execve()` and the ptrace stop where the
   options are visible. Pass secrets via env/stdin.

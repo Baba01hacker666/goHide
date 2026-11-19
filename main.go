@@ -31,13 +31,16 @@ var version = "dev"
 const usage = `gohide %s — run a command disguised as a kernel worker
 
 usage:
-  gohide <command> [args...]
+  gohide [-pt] <command> [args...]
 
 That's it. Options and environment are hidden from ps/top and /proc, and the
 process shows up as something like [kworker/3:1-events].
 
+  -pt               also spoof the kernel comm (plain top/htop, ps -o comm)
+
 optional environment:
   GOHIDE_NAME=NAME    use a custom name instead of a random kworker
+  GOHIDE_PT=1         same as -pt
   GOHIDE_FOLLOW=1     hide child processes too
   GOHIDE_KEEP_ENV=1   leave the environment alone
   GOHIDE_PID=N        start under pid N
@@ -45,8 +48,20 @@ optional environment:
   gohide version
 `
 
-// command strips an optional leading "--" (for people used to it).
+// shortComm makes a <=15 byte kernel comm from a (possibly longer) fake name.
+func shortComm(name string) string {
+	s := strings.Trim(name, "[]")
+	if len(s) > 15 {
+		s = s[:15]
+	}
+	return s
+}
+
+// command strips optional leading "-pt" / "--" tokens.
 func command(argv []string) ([]string, error) {
+	if len(argv) > 0 && (argv[0] == "-pt" || argv[0] == "--") {
+		argv = argv[1:]
+	}
 	if len(argv) > 0 && argv[0] == "--" {
 		argv = argv[1:]
 	}
@@ -70,8 +85,11 @@ func kworkerName() string {
 
 // zapperArgs maps our zero-config CLI onto the engine's getopt CLI. "--"
 // keeps a command that itself starts with a dash from being eaten as a flag.
-func zapperArgs(bin, name string, argv []string) []string {
+func zapperArgs(bin, name string, pt bool, argv []string) []string {
 	args := []string{bin, "-a", name}
+	if pt {
+		args = append(args, "-p", shortComm(name))
+	}
 	if os.Getenv("GOHIDE_FOLLOW") == "1" {
 		args = append(args, "-f")
 	}
@@ -147,6 +165,7 @@ func main() {
 		return
 	}
 
+	pt := os.Getenv("GOHIDE_PT") == "1" || (len(os.Args) > 1 && os.Args[1] == "-pt")
 	cmd, err := command(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gohide: %v\n\n%s", err, fmt.Sprintf(usage, version))
@@ -162,7 +181,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "gohide: %v\n", err)
 		os.Exit(1)
 	}
-	if err := syscall.Exec(bin, zapperArgs(bin, name, cmd), os.Environ()); err != nil {
+	if err := syscall.Exec(bin, zapperArgs(bin, name, pt, cmd), os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "gohide: exec %s: %v\n", bin, err)
 		os.Exit(1)
 	}

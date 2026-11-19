@@ -22,18 +22,19 @@ const (
 	ptracePeekdata    = 2
 	ptracePokedata    = 5
 	ptraceCont        = 7
+	ptraceSinglestep  = 9
 	ptraceGetregs     = 12
 	ptraceSetregs     = 13
 	ptraceDetach      = 17
 	ptraceSyscall     = 24
-	ptraceSetoptions  = 0x4208
-	ptraceGeteventmsg = 0x420a
+	ptraceSetoptions  = 0x4200
+	ptraceGeteventmsg = 0x4201
 
 	optTraceSysgood = 0x000001
 	optTraceFork    = 0x000002
 	optTraceVfork   = 0x000004
 	optTraceExec    = 0x000008
-	optExitkill     = 0x200000
+	optExitkill     = 0x100000
 
 	eventFork  = 1
 	eventVfork = 2
@@ -68,7 +69,12 @@ func waitpid(pid int, ws *syscall.WaitStatus, opts int) (int, error) {
 }
 
 func peekWord(pid int, addr uintptr) (uintptr, error) {
-	return ptraceCall(ptracePeekdata, pid, addr, 0)
+	var out uintptr
+	_, err := ptraceCall(ptracePeekdata, pid, addr, uintptr(unsafe.Pointer(&out)))
+	if err != nil {
+		return 0, err
+	}
+	return out, nil
 }
 
 func pokeWord(pid int, addr, val uintptr) error {
@@ -105,7 +111,7 @@ func readStack(pid int, sp uintptr, maxWords int) ([]uintptr, error) {
 	for i := 0; i < maxWords; i++ {
 		w, err := peekWord(pid, sp+uintptr(i)*wordSize)
 		if err != nil {
-			break
+			break // reached the end of the stack mapping
 		}
 		out = append(out, w)
 	}
@@ -136,6 +142,70 @@ func readCString(pid int, addr uintptr, max int) string {
 
 func putWord(b []byte, off int, v uintptr) {
 	binary.LittleEndian.PutUint64(b[off:], uint64(v))
+}
+
+// writeBytes writes a zero-padded whole-word buffer. PTRACE_POKEDATA works a
+// word at a time, so partial writes would clobber neighbouring bytes.
+func writeBytes(pid int, addr uintptr, b []byte) error {
+	buf := append([]byte(nil), b...)
+	if rem := len(buf) % wordSize; rem != 0 {
+		buf = append(buf, make([]byte, wordSize-rem)...)
+	}
+	for off := 0; off < len(buf); off += wordSize {
+		if err := pokeWord(pid, addr+uintptr(off), uintptr(binary.LittleEndian.Uint64(buf[off:]))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setComm injects prctl(PR_SET_NAME, name) into the tracee. top/htop and
+// "ps -o comm" read the kernel comm field, which zapper/argv tricks never
+// touch. The name is staged in the wiped env region and erased afterwards.
+func setComm(pid int, regs *syscall.PtraceRegs, name string, addr uintptr) error {
+	if name == "" || addr == 0 {
+		return nil
+	}
+	comm := make([]byte, 16)
+	n := len(name)
+	if n > 15 {
+		n = 15 // TASK_COMM_LEN - 1
+	}
+	copy(comm, name[:n])
+
+	rip := uintptr(regs.Rip)
+	orig, err := peekWord(pid, rip)
+	if err != nil {
+		return err
+	}
+	if err := writeBytes(pid, addr, comm); err != nil {
+		return err
+	}
+	// 0f 05 = syscall on x86_64
+	if err := pokeWord(pid, rip, (orig&^uintptr(0xffff))|0x050f); err != nil {
+		return err
+	}
+	call := *regs
+	call.Rax = 157 // __NR_prctl
+	call.Rdi = 15  // PR_SET_NAME
+	call.Rsi = uint64(addr)
+	call.Rdx, call.R10, call.R8, call.R9 = 0, 0, 0, 0
+
+	restore := func() {
+		_ = pokeWord(pid, rip, orig)
+		_ = setRegs(pid, regs)
+		_ = writeBytes(pid, addr, make([]byte, 16))
+	}
+	if err := setRegs(pid, &call); err != nil {
+		restore()
+		return err
+	}
+	if _, err := ptraceCall(ptraceSinglestep, pid, 0, 0); err == nil {
+		var ws syscall.WaitStatus
+		_, _ = waitpid(pid, &ws, 0)
+	}
+	restore()
+	return nil
 }
 
 type stackLayout struct {
@@ -312,7 +382,7 @@ func rebuildStack(l *stackLayout, name string, keepEnv bool) ([]byte, uintptr, e
 
 // zap rewrites one tracee's initial stack. The tracee must be stopped just
 // after execve() with its registers available.
-func zap(pid int, name string, keepEnv bool) error {
+func zap(pid int, name, comm string, keepEnv bool) error {
 	regs, err := getRegs(pid)
 	if err != nil {
 		return fmt.Errorf("getregs: %w", err)
@@ -340,11 +410,20 @@ func zap(pid int, name string, keepEnv bool) error {
 			return fmt.Errorf("pokedata at %#x: %w", newSP+uintptr(off), err)
 		}
 	}
+	if comm != "" {
+		addr := l.envMin // wiped env region
+		if addr == 0 {
+			addr = l.argMin
+		}
+		if err := setComm(pid, regs, comm, addr); err != nil {
+			return fmt.Errorf("comm: %w", err)
+		}
+	}
 	return nil
 }
 
 // run starts the command under ptrace, zaps it, and waits for it.
-func run(name string, follow, keepEnv bool, argv []string) error {
+func run(name, comm string, follow, keepEnv bool, argv []string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -365,7 +444,7 @@ func run(name string, follow, keepEnv bool, argv []string) error {
 	if err := setOptions(pid, follow); err != nil {
 		return fmt.Errorf("setoptions: %w", err)
 	}
-	if err := zap(pid, name, keepEnv); err != nil {
+	if err := zap(pid, name, comm, keepEnv); err != nil {
 		_, _ = ptraceCall(ptraceDetach, pid, 0, 0)
 		_, _ = proc.Wait()
 		return err
@@ -383,11 +462,11 @@ func run(name string, follow, keepEnv bool, argv []string) error {
 		return nil
 	}
 
-	return followTrace(pid, name, keepEnv)
+	return followTrace(pid, name, comm, keepEnv)
 }
 
 // followTrace keeps tracing fork/exec events and zaps every new program.
-func followTrace(root int, name string, keepEnv bool) error {
+func followTrace(root int, name, comm string, keepEnv bool) error {
 	pending := map[int]bool{}
 	if _, err := ptraceCall(ptraceCont, root, 0, 0); err != nil {
 		return err
@@ -443,7 +522,7 @@ func followTrace(root int, name string, keepEnv bool) error {
 		case sig == syscallTrap:
 			if pending[pid] {
 				delete(pending, pid)
-				if err := zap(pid, name, keepEnv); err != nil {
+				if err := zap(pid, name, comm, keepEnv); err != nil {
 					fmt.Fprintf(os.Stderr, "gohide: zap child %d: %v\n", pid, err)
 				}
 			}

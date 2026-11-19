@@ -9,7 +9,8 @@ zapper, but implemented with raw `PTRACE_*` syscalls so there is no vendored C
 and no compiler needed at runtime.
 
 Status:
-- amd64 stack rebuild and register handling written in `engine.go`.
+- amd64 stack rebuild and register handling work in `engine.go`.
+- `-pt` comm spoofing works (ptrace-injected `prctl(PR_SET_NAME)`).
 - `followTrace()` still needs testing against real fork/exec trees.
 - Needs arm64 support and a proper test suite before replacing the wrapper.
 

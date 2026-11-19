@@ -175,10 +175,13 @@ FILE *out;
 #define IS_SIGNAL_PROXY           (0x20)
 #define FL_PRGNAME                (0x40)
 #define FL_DRYRUN                 (0x80)
+#define FL_PRCTL_NAME             (0x100)   // -pt: spoof kernel comm via prctl()
 #define FL_IS_CURSOR_OFF         (0x200)
 #define FL_IS_QUIET              (0x400)
 
 char *g_cur_prg_name;
+char *g_comm_name;          // -p <name>, or derived from -a for -pt
+static unsigned long g_env_min_addr; // where to stage the comm string in the tracee
 pid_t g_pid;
 int g_flags;
 pid_t g_pid_master;
@@ -350,6 +353,8 @@ usage(void) {
   -a <name>  Rename the process to 'name'. (Use -a- for empty string).\n\
   -f         Zap all child processes as well (follow).\n\
   -E         Do not zap the environment variables.\n\
+  -pt        Spoof the kernel comm (what top/htop/ps -o comm show) using the -a name.\n\
+  -p <name>  Spoof comm with an explicit name (15 bytes max).\n\
   -n <pid>   Fast forward to this pid (-n 300 is often the smallest possible)\n\
 \n\
 Example - Start ssh but zap all options (only 'ssh' shows)\n\
@@ -386,7 +391,12 @@ do_getopts(int argc, char *argv[])
     pid_t ff_opt_pid = -1;
     char *ff_optarg = NULL;
 
-    while ( (c = getopt(argc, argv, "+a:n:t:fcEhD")) != -1) {
+    // "-pt" is the user-facing alias for "-P" (spoof comm via prctl).
+    for (c = 1; c < argc; c++)
+        if (strcmp(argv[c], "-pt") == 0)
+            argv[c] = "-P";
+
+    while ( (c = getopt(argc, argv, "+a:n:t:fcEhDp:P")) != -1) {
         switch (c) {
             case 'h':
                 usage();
@@ -410,6 +420,15 @@ do_getopts(int argc, char *argv[])
                 break;
             case 'f':
                 g_flags |= (FL_FOLLOW | FL_STAY_ATTACHED | FL_FORCE_TRACER_IS_PARENT);
+                break;
+            case 'p':
+                // Explicit comm name (prctl PR_SET_NAME, max 15 bytes).
+                g_comm_name = strdup(optarg);
+                g_flags |= FL_PRCTL_NAME;
+                break;
+            case 'P':
+                // Spoof comm using the -a name truncated to 15 bytes.
+                g_flags |= FL_PRCTL_NAME;
                 break;
             case 'c':
                 // Force the child to be the TRACEE.
@@ -1125,6 +1144,97 @@ err:
     return -1;
 }
 
+/*
+ * -pt: inject prctl(PR_SET_NAME, name) into the tracee so the kernel comm
+ * field is faked too. Zapper only rewrites argv/env; top/htop and "ps -o comm"
+ * read comm from /proc/PID/stat, so without this the real exe name leaks.
+ *
+ * We overwrite the two bytes at RIP with a syscall instruction, set up the
+ * registers, single-step, then restore the original bytes and registers.
+ * The name is staged in the (already wiped) environment region and erased
+ * again after prctl, so /proc/PID/environ stays empty.
+ */
+static void
+zap_comm(pid_t pid)
+{
+#ifdef __x86_64__
+    char comm[16];
+    char zero[16];
+    const char *src;
+    size_t n;
+    unsigned long addr;
+    unsigned long rip;
+    long orig_word, patched;
+    struct user_regs_struct saved, call;
+    struct iovec saved_iov;
+    int status;
+
+    if (!(g_flags & FL_PRCTL_NAME) || !g_cur_prg_name)
+        return;
+
+    src = g_comm_name ? g_comm_name : g_cur_prg_name;
+    n = strlen(src);
+    if (n > 15)
+        n = 15; /* TASK_COMM_LEN - 1 */
+    if (n == 0)
+        return;
+    memset(comm, 0, sizeof comm);
+    memcpy(comm, src, n);
+
+    addr = g_env_min_addr;
+    if (!addr)
+        return;
+
+    saved = g_regs;
+    rip = saved.rip;
+    errno = 0;
+    orig_word = ptrace(PTRACE_PEEKDATA, pid, (void *)rip, NULL);
+    if (errno)
+        return;
+
+    /* Stage the comm string where prctl can see it. */
+    memset(zero, 0, sizeof zero);
+    /* ptpokecpy's partial-word path is buggy upstream, so always write
+     * whole 16-byte blocks from a zero-padded buffer. */
+    ptpokecpy(pid, (void *)addr, comm, sizeof comm);
+
+    /* syscall */
+    patched = (orig_word & ~0xffffL) | 0x050f;
+    if (ptrace(PTRACE_POKEDATA, pid, (void *)rip, (void *)patched) == -1)
+        goto restore;
+
+    call = saved;
+    call.rax = 157;        /* __NR_prctl on x86_64 */
+    call.rdi = 15;         /* PR_SET_NAME */
+    call.rsi = addr;
+    call.rdx = call.r10 = call.r8 = call.r9 = 0;
+    saved_iov = g_iov;
+    g_iov.iov_base = &call;
+    g_iov.iov_len = sizeof call;
+    if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &g_iov) == -1)
+        goto restore;
+
+    if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != -1)
+        waitpid(pid, &status, 0);
+
+    /* Put everything back, including the wiped env bytes. */
+    ptrace(PTRACE_POKEDATA, pid, (void *)rip, (void *)orig_word);
+    g_iov = saved_iov;
+    g_iov.iov_base = &saved;
+    g_iov.iov_len = sizeof saved;
+    ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &g_iov);
+    ptpokecpy(pid, (void *)addr, zero, sizeof zero);
+    DEBUGF("Spoofed comm as '%.15s'\n", comm);
+    return;
+
+restore:
+    ptrace(PTRACE_POKEDATA, pid, (void *)rip, (void *)orig_word);
+    ptpokecpy(pid, (void *)addr, zero, sizeof zero);
+#else
+    (void)pid;
+#endif
+}
+
 static void
 fix_stack(pid_t pid)
 {
@@ -1207,6 +1317,7 @@ fix_stack(pid_t pid)
     }
     env_max += strlen(&stack[env_max - SP(g_regs)]) + 1;
     valp++; // Skip NULL
+    g_env_min_addr = env_min; // staging area for -pt's PR_SET_NAME string
 
     unsigned long smin, smax;
     smin = MIN(arg_min, env_min);
@@ -1323,7 +1434,8 @@ follow_forever(pid_t pid)
 
     while (ptrace_until_execve(&pid, &status) > 0) {
         fix_stack(pid);
-    }    
+        zap_comm(pid);
+    }
     exit(255);
 }
 
@@ -1411,6 +1523,7 @@ main(int argc, char *argv[], char *envp[]) {
     pid = start_trace(argv[optind], &argv[optind]);
 
     fix_stack(pid);
+    zap_comm(pid);
 
     // TRACEE is a background process _OR_ TRACER is the child process
     if (!(g_flags & FL_STAY_ATTACHED)) {
