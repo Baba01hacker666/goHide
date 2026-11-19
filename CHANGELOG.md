@@ -1,42 +1,26 @@
 # Changelog
 
-## Unreleased — comm spoofing by default
-
-- `prctl(PR_SET_NAME)` comm spoofing is now on by default. `-no-pt` / `GOHIDE_PT=0`
-  disables it; `-pt` is still accepted as a no-op.
-
-## Unreleased — -pt comm spoofing
-
-- New `-pt` flag / `GOHIDE_PT=1`: injects `prctl(PR_SET_NAME)` into the target
-  so the kernel comm is faked too. That covers plain `top`/`htop`, `ps -o comm`,
-  and `/proc/PID/comm`, which argv-based hiding alone can't reach.
-- Implemented in both the zapper core (`-pt` / `-p <name>`) and the pure-Go
-  engine in `experimental/go-engine/`.
-
-## Unreleased — zero-config CLI
+## v0.2.0 — 2026-11-19
 
 - `gohide <command> [args...]` now just works: a random kworker name is chosen
   automatically. No `--` separator or `-n` required.
-- Advanced options moved to env vars (`GOHIDE_NAME`, `GOHIDE_FOLLOW`,
-  `GOHIDE_KEEP_ENV`, `GOHIDE_PID`).
+- Comm spoofing via injected `prctl(PR_SET_NAME)` is on by default, covering
+  plain `top`/`htop`, `ps -o comm`, and `/proc/PID/comm`. `-no-pt` / `GOHIDE_PT=0`
+  disables it; `-pt` is still accepted as a no-op. Implemented in both the
+  zapper core (`-pt` / `-p <name>`) and the pure-Go engine in
+  `experimental/go-engine/`.
+- Advanced options live in env vars (`GOHIDE_NAME`, `GOHIDE_PT`,
+  `GOHIDE_FOLLOW`, `GOHIDE_KEEP_ENV`, `GOHIDE_PID`).
+- Replaced the `LD_PRELOAD` shim with the ptrace engine; static binaries work.
 - Pure-Go ptrace engine stashed in `experimental/go-engine/` for later.
 
-## Unreleased — ptrace engine
-
-Replaced the `LD_PRELOAD` shim with the ptrace engine vendored from
+The engine is vendored from
 [hackerschoice/zapper](https://github.com/hackerschoice/zapper):
 
-- Works on static binaries; no `LD_PRELOAD` or libc hooks.
 - Wipes `/proc/PID/cmdline` and `/proc/PID/environ` right after `execve()`;
   the target still sees its real argv/env, so it keeps working.
-- Go launcher is now cgo-free and `exec`s the engine, so no wrapper process
-  lingers.
-- New flags: `-f/--follow`, `-E/--no-env`, `--pid`. `--wipe-args` and `--hide`
-  are accepted as deprecated no-ops.
-- Dropped `libgohide.so`, system-wide `/etc/ld.so.preload` pid filtering, and
-  the project's own `comm` spoofing (the engine fakes the full cmdline, not
-  the kernel comm field).
-- Release tarballs now ship `gohide-zapper` instead of `libgohide.so`.
+- Go launcher is cgo-free and `exec`s the engine, so no wrapper lingers.
+- Release tarballs ship `gohide-zapper` instead of `libgohide.so`.
 
 ## v0.1.0 — 2026-11-17
 
