@@ -30,15 +30,13 @@ jobs:
           echo "$out"
           echo "$out" | grep -q '^\[kworker/'
 
-      - name: smoke test (background target)
+      - name: smoke test (custom name + comm)
         run: |
-          GOHIDE_NAME='[ksoftirqd/2]' ./bin/gohide sleep 30 >/dev/null 2>&1 &
-          pid=$!
-          sleep 0.5
-          args="$(ps -p $pid -o args=)"
-          echo "args=$args"
+          comm="$(GOHIDE_NAME='[ksoftirqd/2]' ./bin/gohide /bin/sh -c 'cat /proc/$$/comm')"
+          args="$(GOHIDE_NAME='[ksoftirqd/2]' ./bin/gohide /bin/sh -c 'ps -p $$ -o args=')"
+          echo "comm=$comm args=$args"
+          [ "$comm" = "ksoftirqd/2" ]
           [ "$args" = "[ksoftirqd/2]" ]
-          kill $pid
 
   fmt:
     runs-on: ubuntu-latest
